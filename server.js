@@ -552,6 +552,15 @@ app.get('/player/:puuid/stats', async (req, res) => {
 
 // ── ADMIN ─────────────────────────────────────────────────────────────────────
 
+app.get('/admin/reset-participants', async (_req, res) => {
+  try {
+    const result = await pool.query('UPDATE matches SET all_participants = NULL');
+    res.json({ status: 'ok', updated: result.rowCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/admin/dedupe', async (req, res) => {
   try {
     await pool.query(`
