@@ -434,15 +434,19 @@ app.get('/sync-status/:puuid', (req, res) => {
 app.get('/player/:puuid/matches', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT m.*, t.gold_at_10, t.gold_diff_at_10,
+      `SELECT m.*,
+              t.gold_at_10, t.gold_diff_at_10,
               t.cs_at_10, t.cs_diff_at_10,
-              t.gold_at_15, t.gold_diff_at_15
+              t.gold_at_15, t.gold_diff_at_15,
+              t.cs_at_15, t.cs_diff_at_15
        FROM matches m
        LEFT JOIN timeline_data t ON m.match_id = t.match_id
+         AND t.puuid = m.puuid
        WHERE m.puuid = $1
        ORDER BY m.game_creation DESC`,
       [req.params.puuid]
     );
+    console.log('Match avec timeline:', rows[0]?.match_id, 'gold_at_10:', rows[0]?.gold_at_10);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -451,13 +455,14 @@ app.get('/player/:puuid/matches', async (req, res) => {
 
 app.get('/player/:puuid/timeline/:matchId', async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT * FROM timeline_data WHERE puuid=$1 AND match_id=$2 LIMIT 1`,
-      [req.params.puuid, req.params.matchId]
+    const { puuid, matchId } = req.params;
+    const result = await pool.query(
+      'SELECT * FROM timeline_data WHERE match_id = $1 AND puuid = $2',
+      [matchId, puuid]
     );
-    if (!rows.length) return res.status(404).json({ error: 'Timeline introuvable' });
-    res.json(rows[0]);
+    res.json(result.rows[0] || {});
   } catch (err) {
+    console.error('Timeline error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
