@@ -224,10 +224,10 @@ async function runSync(puuid, gameName, tagLine, region, key) {
 
     for (const matchId of matchIds) {
       const exists = await pool.query(
-        'SELECT 1 FROM matches WHERE match_id=$1 AND puuid=$2',
+        'SELECT all_participants FROM matches WHERE match_id=$1 AND puuid=$2',
         [matchId, puuid]
       );
-      if (exists.rows.length) { skipped++; continue; }
+      if (exists.rows.length && exists.rows[0].all_participants) { skipped++; continue; }
 
       await sleep(50);
       const match = await riotGet(`${base}/lol/match/v5/matches/${matchId}`, key);
@@ -294,9 +294,16 @@ async function runSync(puuid, gameName, tagLine, region, key) {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
                  $16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
          ON CONFLICT (match_id) DO UPDATE SET
-           all_participants = EXCLUDED.all_participants,
-           items = COALESCE(matches.items, EXCLUDED.items),
-           runes = COALESCE(matches.runes, EXCLUDED.runes)`,
+           all_participants  = EXCLUDED.all_participants,
+           items             = EXCLUDED.items,
+           runes             = EXCLUDED.runes,
+           kill_participation = EXCLUDED.kill_participation,
+           vision_score      = EXCLUDED.vision_score,
+           damage_dealt      = EXCLUDED.damage_dealt,
+           gold_per_min      = EXCLUDED.gold_per_min,
+           wards_placed      = EXCLUDED.wards_placed,
+           wards_killed      = EXCLUDED.wards_killed,
+           control_wards     = EXCLUDED.control_wards`,
         [
           matchId, puuid,
           info.gameStartTimestamp || 0, durSec,
