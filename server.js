@@ -282,6 +282,8 @@ async function runSync(puuid, gameName, tagLine, region, key) {
         visionScore:      p.visionScore,
         win:              p.win,
       })));
+      console.log('allParticipants length:', allParticipants ? JSON.parse(allParticipants).length : 'NULL');
+      console.log('allParticipants sample:', allParticipants ? allParticipants.slice(0, 100) : 'NULL');
 
       await pool.query(
         `INSERT INTO matches
@@ -312,6 +314,7 @@ async function runSync(puuid, gameName, tagLine, region, key) {
           items, runes, allParticipants,
         ]
       );
+      console.log('Match inserted, all_participants stored:', allParticipants ? 'YES' : 'NO');
 
       const myPid  = me.participantId;
       const oppPid = opp?.participantId ?? null;
