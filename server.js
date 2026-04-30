@@ -223,11 +223,11 @@ async function runSync(puuid, gameName, tagLine, region, key) {
     let imported = 0, skipped = 0;
 
     for (const matchId of matchIds) {
-      const exists = await pool.query(
-        'SELECT all_participants FROM matches WHERE match_id=$1 AND puuid=$2',
-        [matchId, puuid]
+      const existing = await pool.query(
+        'SELECT match_id, all_participants FROM matches WHERE match_id = $1',
+        [matchId]
       );
-      if (exists.rows.length && exists.rows[0].all_participants) { skipped++; continue; }
+      if (existing.rows.length > 0 && existing.rows[0].all_participants) { skipped++; continue; }
 
       await sleep(50);
       const match = await riotGet(`${base}/lol/match/v5/matches/${matchId}`, key);
@@ -536,6 +536,26 @@ app.get('/player/:puuid/stats', async (req, res) => {
         winrate: Math.round(parseInt(ch.wins) / parseInt(ch.games) * 100),
       } : null,
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ADMIN ─────────────────────────────────────────────────────────────────────
+
+app.get('/admin/dedupe', async (_req, res) => {
+  try {
+    const result = await pool.query(`
+      DELETE FROM matches WHERE id IN (
+        SELECT id FROM (
+          SELECT id, ROW_NUMBER() OVER (
+            PARTITION BY match_id, puuid
+            ORDER BY id ASC
+          ) AS rn FROM matches
+        ) t WHERE rn > 1
+      )
+    `);
+    res.json({ status: 'deduped', deleted: result.rowCount });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
