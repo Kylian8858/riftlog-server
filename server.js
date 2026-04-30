@@ -115,6 +115,12 @@ async function initDB() {
   }
 
   await pool.query(`
+    DELETE FROM timeline_data WHERE id NOT IN (
+      SELECT MIN(id) FROM timeline_data GROUP BY match_id, puuid
+    )
+  `);
+
+  await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS uq_timeline_match_puuid
     ON timeline_data(match_id, puuid)
   `);
