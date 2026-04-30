@@ -22,8 +22,13 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'riftlog-server' });
 });
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+app.get('/health', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', db: 'connected' });
+  } catch {
+    res.json({ status: 'ok', db: 'disconnected' });
+  }
 });
 
 // ── DATABASE ─────────────────────────────────────────────────────────────────
@@ -399,26 +404,18 @@ app.get('/player/:puuid/stats', async (req, res) => {
   }
 });
 
-// ── HEALTH ────────────────────────────────────────────────────────────────────
-
-app.get('/health', async (_req, res) => {
-  try {
-    await pool.query('SELECT 1');
-    res.json({ ok: true, db: 'connected' });
-  } catch {
-    res.json({ ok: true, db: 'disconnected' });
-  }
-});
-
 // ── START ─────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
 
-(async () => {
+app.listen(PORT, () => {
+  console.log(`riftlog-server listening on port ${PORT}`);
+
   if (process.env.DATABASE_URL) {
-    try { await initDB(); } catch (e) { console.error('DB init error:', e.message); }
+    initDB()
+      .then(() => console.log('DB ready'))
+      .catch(e => console.error('DB init error:', e.message));
   } else {
     console.warn('DATABASE_URL non définie — PostgreSQL désactivé');
   }
-  app.listen(PORT, () => console.log(`riftlog-server listening on port ${PORT}`));
-})();
+});
