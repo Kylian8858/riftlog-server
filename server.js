@@ -169,24 +169,13 @@ app.get('/match/:matchId', (req, res) => {
   riotFetch(res, `${RIOT_BASE}/lol/match/v5/matches/${req.params.matchId}`);
 });
 
-// ── SYNC ENDPOINT ─────────────────────────────────────────────────────────────
+// ── SYNC STATE ────────────────────────────────────────────────────────────────
 
-app.get('/sync/:gameName/:tagLine/:region', async (req, res) => {
-  const { gameName, tagLine, region } = req.params;
-  const key = process.env.RIOT_API_KEY;
-  if (!key) return res.status(500).json({ error: 'RIOT_API_KEY manquante' });
+const syncStatus = {};
 
+async function runSync(puuid, gameName, tagLine, region, key) {
   const base = regionalBase(region);
-
   try {
-    // 1 — PUUID
-    const acct = await riotGet(
-      `${base}/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}`,
-      key
-    );
-    const puuid = acct.puuid;
-
-    // 2 — Sauvegarde joueur
     await pool.query(
       `INSERT INTO players (puuid, game_name, tag_line, region)
        VALUES ($1,$2,$3,$4)
@@ -194,14 +183,15 @@ app.get('/sync/:gameName/:tagLine/:region', async (req, res) => {
       [puuid, gameName, tagLine, region]
     );
 
-    // 3 — Match IDs (20 derniers)
     await sleep(50);
     const matchIds = await riotGet(
       `${base}/lol/match/v5/matches/by-puuid/${puuid}/ids?count=20`,
       key
     );
 
-    // 4 — Chaque match
+    const total = matchIds.length;
+    syncStatus[puuid].total = total;
+
     let imported = 0, skipped = 0;
 
     for (const matchId of matchIds) {
@@ -211,11 +201,9 @@ app.get('/sync/:gameName/:tagLine/:region', async (req, res) => {
       );
       if (exists.rows.length) { skipped++; continue; }
 
-      // Détails du match
       await sleep(50);
       const match = await riotGet(`${base}/lol/match/v5/matches/${matchId}`, key);
 
-      // Timeline
       await sleep(50);
       let timeline = null;
       try {
@@ -254,12 +242,10 @@ app.get('/sync/:gameName/:tagLine/:region', async (req, res) => {
         ]
       );
 
-      // ── Timeline at 10 min ────────────────────────────────────────────────
       const myPid  = me.participantId;
       const oppPid = opp?.participantId ?? null;
       const frames = timeline?.info?.frames || [];
 
-      // Frame la plus proche de 600 000 ms sans la dépasser
       const frame10 = frames.reduce((best, f) => {
         if (f.timestamp <= 600000) return f;
         return best;
@@ -271,12 +257,10 @@ app.get('/sync/:gameName/:tagLine/:region', async (req, res) => {
       if (frame10?.participantFrames) {
         const myF  = frame10.participantFrames[myPid];
         const oppF = oppPid ? frame10.participantFrames[oppPid] : null;
-
         if (myF) {
           gold10 = myF.totalGold ?? null;
           cs10   = (myF.minionsKilled || 0) + (myF.jungleMinionsKilled || 0);
           xp10   = myF.xp ?? null;
-
           if (oppF) {
             const oppCs10 = (oppF.minionsKilled || 0) + (oppF.jungleMinionsKilled || 0);
             goldDiff10 = gold10 - (oppF.totalGold || 0);
@@ -285,14 +269,13 @@ app.get('/sync/:gameName/:tagLine/:region', async (req, res) => {
         }
       }
 
-      // Kills/deaths avant 10 min via events
       for (const frame of frames) {
         if (!frame.events) continue;
         for (const ev of frame.events) {
           if (ev.timestamp >= 600000) break;
           if (ev.type === 'CHAMPION_KILL') {
-            if (ev.killerId  === myPid) kills10++;
-            if (ev.victimId  === myPid) deaths10++;
+            if (ev.killerId === myPid) kills10++;
+            if (ev.victimId === myPid) deaths10++;
           }
         }
       }
@@ -306,14 +289,51 @@ app.get('/sync/:gameName/:tagLine/:region', async (req, res) => {
       );
 
       imported++;
+      syncStatus[puuid].imported = imported;
+      syncStatus[puuid].message  = `${imported} / ${total - skipped} match${imported > 1 ? 's' : ''} importé${imported > 1 ? 's' : ''}…`;
     }
 
-    res.json({ imported, skipped });
+    syncStatus[puuid] = { status: 'done', imported, skipped, total, message: `${imported} match${imported > 1 ? 's' : ''} importé${imported > 1 ? 's' : ''}` };
+    console.log(`Sync done for ${puuid}: imported=${imported} skipped=${skipped}`);
 
   } catch (err) {
-    console.error('Sync error:', err);
+    console.error('Sync background error:', err);
+    syncStatus[puuid] = { status: 'error', message: err.message };
+  }
+}
+
+// ── SYNC ENDPOINT ─────────────────────────────────────────────────────────────
+
+app.get('/sync/:gameName/:tagLine/:region', async (req, res) => {
+  const { gameName, tagLine, region } = req.params;
+  const key = process.env.RIOT_API_KEY;
+  if (!key) return res.status(500).json({ error: 'RIOT_API_KEY manquante' });
+
+  const base = regionalBase(region);
+
+  try {
+    const acct = await riotGet(
+      `${base}/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}`,
+      key
+    );
+    const puuid = acct.puuid;
+
+    syncStatus[puuid] = { status: 'running', imported: 0, total: 0, message: 'Démarrage…' };
+
+    res.json({ status: 'started', puuid });
+
+    runSync(puuid, gameName, tagLine, region, key);
+
+  } catch (err) {
+    console.error('Sync init error:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/sync-status/:puuid', (req, res) => {
+  const st = syncStatus[req.params.puuid];
+  if (!st) return res.json({ status: 'idle' });
+  res.json(st);
 });
 
 // ── PLAYER DATA ENDPOINTS ─────────────────────────────────────────────────────
