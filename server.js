@@ -348,6 +348,11 @@ async function runSync(puuid, gameName, tagLine, region, key) {
       const { my: my15, opp: opp15 } = extractFrame(closestFrame(900000));
       const s15 = frameStats(my15, opp15);
 
+      console.log('Timeline match:', matchId);
+      console.log('Gold @10:', s10.gold);
+      console.log('Gold diff @10:', s10.goldDiff);
+      console.log('Inserting timeline data...');
+
       let kills10 = 0, deaths10 = 0;
       for (const frame of frames) {
         if (!frame.events) continue;
@@ -375,6 +380,7 @@ async function runSync(puuid, gameName, tagLine, region, key) {
         ]
       );
 
+      console.log('Timeline inserted for:', matchId);
       imported++;
       syncStatus[puuid].imported = imported;
       syncStatus[puuid].message  = `${imported} / ${total - skipped} match${imported > 1 ? 's' : ''} importé${imported > 1 ? 's' : ''}…`;
@@ -428,7 +434,13 @@ app.get('/sync-status/:puuid', (req, res) => {
 app.get('/player/:puuid/matches', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT * FROM matches WHERE puuid=$1 ORDER BY game_creation DESC`,
+      `SELECT m.*, t.gold_at_10, t.gold_diff_at_10,
+              t.cs_at_10, t.cs_diff_at_10,
+              t.gold_at_15, t.gold_diff_at_15
+       FROM matches m
+       LEFT JOIN timeline_data t ON m.match_id = t.match_id
+       WHERE m.puuid = $1
+       ORDER BY m.game_creation DESC`,
       [req.params.puuid]
     );
     res.json(rows);
