@@ -543,19 +543,16 @@ app.get('/player/:puuid/stats', async (req, res) => {
 
 // ── ADMIN ─────────────────────────────────────────────────────────────────────
 
-app.get('/admin/dedupe', async (_req, res) => {
+app.get('/admin/dedupe', async (req, res) => {
   try {
-    const result = await pool.query(`
-      DELETE FROM matches WHERE id IN (
-        SELECT id FROM (
-          SELECT id, ROW_NUMBER() OVER (
-            PARTITION BY match_id, puuid
-            ORDER BY id ASC
-          ) AS rn FROM matches
-        ) t WHERE rn > 1
+    await pool.query(`
+      DELETE FROM matches WHERE ctid NOT IN (
+        SELECT MIN(ctid) FROM matches
+        GROUP BY match_id, puuid
       )
     `);
-    res.json({ status: 'deduped', deleted: result.rowCount });
+    const count = await pool.query('SELECT COUNT(*) FROM matches');
+    res.json({ status: 'deduped', remaining: count.rows[0].count });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
