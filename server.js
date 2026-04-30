@@ -18,6 +18,14 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', service: 'riftlog-server' });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
 // ── DATABASE ─────────────────────────────────────────────────────────────────
 
 const pool = new Pool({
