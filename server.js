@@ -51,24 +51,41 @@ async function initDB() {
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS matches (
-      match_id      TEXT PRIMARY KEY,
-      puuid         TEXT,
-      game_creation BIGINT,
-      game_duration INTEGER,
-      champion_name TEXT,
-      enemy_champion TEXT,
-      lane          TEXT,
-      result        TEXT,
-      kills         INTEGER,
-      deaths        INTEGER,
-      assists       INTEGER,
-      cs            INTEGER,
-      cs_per_min    FLOAT,
-      gold_earned   INTEGER,
-      game_mode     TEXT,
-      created_at    TIMESTAMP DEFAULT NOW()
+      match_id         TEXT PRIMARY KEY,
+      puuid            TEXT,
+      game_creation    BIGINT,
+      game_duration    INTEGER,
+      champion_name    TEXT,
+      enemy_champion   TEXT,
+      lane             TEXT,
+      result           TEXT,
+      kills            INTEGER,
+      deaths           INTEGER,
+      assists          INTEGER,
+      cs               INTEGER,
+      cs_per_min       FLOAT,
+      gold_earned      INTEGER,
+      game_mode        TEXT,
+      created_at       TIMESTAMP DEFAULT NOW()
     )
   `);
+
+  // Enrich columns (idempotent)
+  const matchCols = [
+    'ADD COLUMN IF NOT EXISTS kill_participation FLOAT',
+    'ADD COLUMN IF NOT EXISTS vision_score       INTEGER',
+    'ADD COLUMN IF NOT EXISTS damage_dealt       INTEGER',
+    'ADD COLUMN IF NOT EXISTS gold_per_min       FLOAT',
+    'ADD COLUMN IF NOT EXISTS wards_placed       INTEGER',
+    'ADD COLUMN IF NOT EXISTS wards_killed       INTEGER',
+    'ADD COLUMN IF NOT EXISTS control_wards      INTEGER',
+    'ADD COLUMN IF NOT EXISTS items              TEXT',
+    'ADD COLUMN IF NOT EXISTS runes              TEXT',
+    'ADD COLUMN IF NOT EXISTS all_participants   TEXT',
+  ];
+  for (const col of matchCols) {
+    await pool.query(`ALTER TABLE matches ${col}`);
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS timeline_data (
@@ -85,6 +102,17 @@ async function initDB() {
       created_at      TIMESTAMP DEFAULT NOW()
     )
   `);
+
+  const tlCols = [
+    'ADD COLUMN IF NOT EXISTS gold_at_15      INTEGER',
+    'ADD COLUMN IF NOT EXISTS cs_at_15        INTEGER',
+    'ADD COLUMN IF NOT EXISTS xp_at_15        INTEGER',
+    'ADD COLUMN IF NOT EXISTS gold_diff_at_15 INTEGER',
+    'ADD COLUMN IF NOT EXISTS cs_diff_at_15   INTEGER',
+  ];
+  for (const col of tlCols) {
+    await pool.query(`ALTER TABLE timeline_data ${col}`);
+  }
 
   console.log('PostgreSQL tables ready');
 }
@@ -220,25 +248,65 @@ async function runSync(puuid, gameName, tagLine, region, key) {
         p.teamId !== me.teamId && p.individualPosition === me.individualPosition
       );
 
-      const durMin   = Math.round((info.gameDuration || 0) / 60);
+      const durSec   = info.gameDuration || 0;
+      const durMin   = durSec / 60;
       const cs       = (me.totalMinionsKilled || 0) + (me.neutralMinionsKilled || 0);
       const csPerMin = durMin > 0 ? Math.round((cs / durMin) * 10) / 10 : null;
       const lane     = LANE_LABELS[me.individualPosition] || me.individualPosition || '';
       const gameMode = QUEUE_LABELS[info.queueId] || info.gameMode || '';
 
+      // Enriched fields
+      const teamKills = info.participants
+        .filter(p => p.teamId === me.teamId)
+        .reduce((s, p) => s + (p.kills || 0), 0);
+      const killParticipation = teamKills > 0
+        ? Math.round(((me.kills || 0) + (me.assists || 0)) / teamKills * 100) / 100
+        : null;
+      const goldPerMin = durMin > 0 ? Math.round((me.goldEarned || 0) / durMin * 10) / 10 : null;
+      const items = JSON.stringify([
+        me.item0, me.item1, me.item2, me.item3, me.item4, me.item5, me.item6,
+      ]);
+      const runes = JSON.stringify(me.perks || null);
+      const allParticipants = JSON.stringify(info.participants.map(p => ({
+        puuid:            p.puuid,
+        championName:     p.championName,
+        teamId:           p.teamId,
+        individualPosition: p.individualPosition,
+        kills:            p.kills,
+        deaths:           p.deaths,
+        assists:          p.assists,
+        totalDamageDealtToChampions: p.totalDamageDealtToChampions,
+        goldEarned:       p.goldEarned,
+        totalMinionsKilled: p.totalMinionsKilled,
+        neutralMinionsKilled: p.neutralMinionsKilled,
+        visionScore:      p.visionScore,
+        win:              p.win,
+      })));
+
       await pool.query(
         `INSERT INTO matches
            (match_id, puuid, game_creation, game_duration, champion_name, enemy_champion,
-            lane, result, kills, deaths, assists, cs, cs_per_min, gold_earned, game_mode)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+            lane, result, kills, deaths, assists, cs, cs_per_min, gold_earned, game_mode,
+            kill_participation, vision_score, damage_dealt, gold_per_min,
+            wards_placed, wards_killed, control_wards, items, runes, all_participants)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                 $16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
          ON CONFLICT (match_id) DO NOTHING`,
         [
           matchId, puuid,
-          info.gameStartTimestamp || 0, info.gameDuration || 0,
+          info.gameStartTimestamp || 0, durSec,
           me.championName || '', opp?.championName || '',
           lane, me.win ? 'win' : 'loss',
           me.kills || 0, me.deaths || 0, me.assists || 0,
           cs, csPerMin, me.goldEarned || 0, gameMode,
+          killParticipation,
+          me.visionScore || 0,
+          me.totalDamageDealtToChampions || 0,
+          goldPerMin,
+          me.wardsPlaced || 0,
+          me.wardsKilled || 0,
+          me.visionWardsBoughtInGame || 0,
+          items, runes, allParticipants,
         ]
       );
 
@@ -246,29 +314,41 @@ async function runSync(puuid, gameName, tagLine, region, key) {
       const oppPid = opp?.participantId ?? null;
       const frames = timeline?.info?.frames || [];
 
-      const frame10 = frames.reduce((best, f) => {
-        if (f.timestamp <= 600000) return f;
-        return best;
-      }, frames[0] || null);
-
-      let gold10 = null, cs10 = null, xp10 = null;
-      let goldDiff10 = null, csDiff10 = null, kills10 = 0, deaths10 = 0;
-
-      if (frame10?.participantFrames) {
-        const myF  = frame10.participantFrames[myPid];
-        const oppF = oppPid ? frame10.participantFrames[oppPid] : null;
-        if (myF) {
-          gold10 = myF.totalGold ?? null;
-          cs10   = (myF.minionsKilled || 0) + (myF.jungleMinionsKilled || 0);
-          xp10   = myF.xp ?? null;
-          if (oppF) {
-            const oppCs10 = (oppF.minionsKilled || 0) + (oppF.jungleMinionsKilled || 0);
-            goldDiff10 = gold10 - (oppF.totalGold || 0);
-            csDiff10   = cs10   - oppCs10;
-          }
-        }
+      function closestFrame(ms) {
+        return frames.reduce((best, f) => {
+          if (f.timestamp <= ms) return f;
+          return best;
+        }, frames[0] || null);
       }
 
+      function extractFrame(frame) {
+        if (!frame?.participantFrames) return { my: null, opp: null };
+        return {
+          my:  frame.participantFrames[myPid]  || null,
+          opp: oppPid ? frame.participantFrames[oppPid] || null : null,
+        };
+      }
+
+      function frameStats(my, opp) {
+        if (!my) return { gold: null, cs: null, xp: null, goldDiff: null, csDiff: null };
+        const gold = my.totalGold ?? null;
+        const cs   = (my.minionsKilled || 0) + (my.jungleMinionsKilled || 0);
+        const xp   = my.xp ?? null;
+        let goldDiff = null, csDiff = null;
+        if (opp) {
+          goldDiff = gold - (opp.totalGold || 0);
+          csDiff   = cs   - ((opp.minionsKilled || 0) + (opp.jungleMinionsKilled || 0));
+        }
+        return { gold, cs, xp, goldDiff, csDiff };
+      }
+
+      const { my: my10, opp: opp10 } = extractFrame(closestFrame(600000));
+      const s10 = frameStats(my10, opp10);
+
+      const { my: my15, opp: opp15 } = extractFrame(closestFrame(900000));
+      const s15 = frameStats(my15, opp15);
+
+      let kills10 = 0, deaths10 = 0;
       for (const frame of frames) {
         if (!frame.events) continue;
         for (const ev of frame.events) {
@@ -282,10 +362,17 @@ async function runSync(puuid, gameName, tagLine, region, key) {
 
       await pool.query(
         `INSERT INTO timeline_data
-           (match_id, puuid, gold_at_10, cs_at_10, xp_at_10,
-            gold_diff_at_10, cs_diff_at_10, kills_at_10, deaths_at_10)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [matchId, puuid, gold10, cs10, xp10, goldDiff10, csDiff10, kills10, deaths10]
+           (match_id, puuid,
+            gold_at_10, cs_at_10, xp_at_10, gold_diff_at_10, cs_diff_at_10,
+            kills_at_10, deaths_at_10,
+            gold_at_15, cs_at_15, xp_at_15, gold_diff_at_15, cs_diff_at_15)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [
+          matchId, puuid,
+          s10.gold, s10.cs, s10.xp, s10.goldDiff, s10.csDiff,
+          kills10, deaths10,
+          s15.gold, s15.cs, s15.xp, s15.goldDiff, s15.csDiff,
+        ]
       );
 
       imported++;
