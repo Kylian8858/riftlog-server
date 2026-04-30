@@ -2,8 +2,21 @@ const express = require('express');
 const cors    = require('cors');
 const { Pool } = require('pg');
 
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('UNHANDLED REJECTION:', reason);
+});
+
 const app = express();
 app.use(cors());
+
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.path}`);
+  next();
+});
 
 // ── DATABASE ─────────────────────────────────────────────────────────────────
 
