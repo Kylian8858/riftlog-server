@@ -114,6 +114,11 @@ async function initDB() {
     await pool.query(`ALTER TABLE timeline_data ${col}`);
   }
 
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_timeline_match_puuid
+    ON timeline_data(match_id, puuid)
+  `);
+
   console.log('PostgreSQL tables ready');
 }
 
@@ -303,16 +308,30 @@ async function runSync(puuid, gameName, tagLine, region, key) {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
                  $16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
          ON CONFLICT (match_id) DO UPDATE SET
-           all_participants  = EXCLUDED.all_participants,
-           items             = EXCLUDED.items,
-           runes             = EXCLUDED.runes,
+           puuid             = EXCLUDED.puuid,
+           game_creation     = EXCLUDED.game_creation,
+           game_duration     = EXCLUDED.game_duration,
+           champion_name     = EXCLUDED.champion_name,
+           enemy_champion    = EXCLUDED.enemy_champion,
+           lane              = EXCLUDED.lane,
+           result            = EXCLUDED.result,
+           kills             = EXCLUDED.kills,
+           deaths            = EXCLUDED.deaths,
+           assists           = EXCLUDED.assists,
+           cs                = EXCLUDED.cs,
+           cs_per_min        = EXCLUDED.cs_per_min,
+           gold_earned       = EXCLUDED.gold_earned,
+           game_mode         = EXCLUDED.game_mode,
            kill_participation = EXCLUDED.kill_participation,
            vision_score      = EXCLUDED.vision_score,
            damage_dealt      = EXCLUDED.damage_dealt,
            gold_per_min      = EXCLUDED.gold_per_min,
            wards_placed      = EXCLUDED.wards_placed,
            wards_killed      = EXCLUDED.wards_killed,
-           control_wards     = EXCLUDED.control_wards`,
+           control_wards     = EXCLUDED.control_wards,
+           items             = EXCLUDED.items,
+           runes             = EXCLUDED.runes,
+           all_participants  = EXCLUDED.all_participants`,
         [
           matchId, puuid,
           info.gameStartTimestamp || 0, durSec,
@@ -393,7 +412,20 @@ async function runSync(puuid, gameName, tagLine, region, key) {
             gold_at_10, cs_at_10, xp_at_10, gold_diff_at_10, cs_diff_at_10,
             kills_at_10, deaths_at_10,
             gold_at_15, cs_at_15, xp_at_15, gold_diff_at_15, cs_diff_at_15)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         ON CONFLICT (match_id, puuid) DO UPDATE SET
+           gold_at_10      = EXCLUDED.gold_at_10,
+           cs_at_10        = EXCLUDED.cs_at_10,
+           xp_at_10        = EXCLUDED.xp_at_10,
+           gold_diff_at_10 = EXCLUDED.gold_diff_at_10,
+           cs_diff_at_10   = EXCLUDED.cs_diff_at_10,
+           kills_at_10     = EXCLUDED.kills_at_10,
+           deaths_at_10    = EXCLUDED.deaths_at_10,
+           gold_at_15      = EXCLUDED.gold_at_15,
+           cs_at_15        = EXCLUDED.cs_at_15,
+           xp_at_15        = EXCLUDED.xp_at_15,
+           gold_diff_at_15 = EXCLUDED.gold_diff_at_15,
+           cs_diff_at_15   = EXCLUDED.cs_diff_at_15`,
         [
           matchId, puuid,
           s10.gold, s10.cs, s10.xp, s10.goldDiff, s10.csDiff,
