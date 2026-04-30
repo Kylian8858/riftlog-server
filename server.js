@@ -281,6 +281,15 @@ async function runSync(puuid, gameName, tagLine, region, key) {
         neutralMinionsKilled: p.neutralMinionsKilled,
         visionScore:      p.visionScore,
         win:              p.win,
+        item0:            p.item0,
+        item1:            p.item1,
+        item2:            p.item2,
+        item3:            p.item3,
+        item4:            p.item4,
+        item5:            p.item5,
+        item6:            p.item6,
+        summoner1Id:      p.summoner1Id,
+        summoner2Id:      p.summoner2Id,
       })));
       console.log('allParticipants length:', allParticipants ? JSON.parse(allParticipants).length : 'NULL');
       console.log('allParticipants sample:', allParticipants ? allParticipants.slice(0, 100) : 'NULL');
