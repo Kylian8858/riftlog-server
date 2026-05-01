@@ -301,6 +301,7 @@ async function runSync(puuid, gameName, tagLine, region, key) {
         item6:            p.item6,
         summoner1Id:      p.summoner1Id,
         summoner2Id:      p.summoner2Id,
+        perks:            p.perks ?? null,
       })));
       console.log('allParticipants length:', allParticipants ? JSON.parse(allParticipants).length : 'NULL');
       console.log('allParticipants sample:', allParticipants ? allParticipants.slice(0, 100) : 'NULL');
