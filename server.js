@@ -643,25 +643,43 @@ app.post('/matchup', express.json(), async (req, res) => {
     const message = await anthropic.messages.create({
       model: 'claude-opus-4-5',
       max_tokens: 4096,
-      system: "Tu es un coach League of Legends expert niveau LEC. Analyse les matchups de façon précise et actionnable. Réponds UNIQUEMENT en JSON valide, sans markdown, sans backticks.",
+      system: `Tu es un coach League of Legends qui explique les matchups en français simple et accessible. Tu t'adresses directement au joueur qui joue ${championA} en utilisant 'tu', 'ton', 'ta', 'tes'. Tes explications doivent être claires pour un joueur débutant ou intermédiaire. Si tu utilises un terme de jeu (freeze, roam, poke, all-in, spike...), explique-le en quelques mots entre parenthèses. Tous les noms d'items doivent être en français. Réponds UNIQUEMENT en JSON valide, sans markdown, sans backticks, sans texte avant ou après.`,
       messages: [{
         role: 'user',
-        content: `Analyse le matchup ${championA} vs ${championB} en ${lane} sur le patch ${patch}. Retourne ce JSON exact sans aucun texte autour :
+        content: `Tu joues ${championA} contre ${championB} en ${lane} sur le patch ${patch}.
+
+Explique ce matchup au joueur qui joue ${championA} en utilisant 'tu' à chaque fois. Parle-lui directement, simplement, comme un coach qui l'accompagne en jeu.
+
+Retourne ce JSON exact :
 {
-  "difficulty": "Favorable|Équilibré|Difficile|Très difficile",
-  "difficultyScore": 1,
-  "winConditionA": "...",
-  "winConditionB": "...",
-  "earlyGame": { "tipsA": ["..."], "tipsB": ["..."] },
-  "midGame": { "tipsA": ["..."], "tipsB": ["..."] },
-  "lateGame": { "notes": "..." },
-  "keySpikes": { "A": ["..."], "B": ["..."] },
-  "mistakesToAvoid": { "A": ["..."], "B": ["..."] },
-  "runes": { "A": "...", "B": "..." },
-  "items": { "A": ["..."], "B": ["..."] },
-  "gamePlan": { "0-5min": "...", "5-15min": "...", "15-25min": "...", "25min+": "..." },
-  "commonMistakes": ["..."],
-  "tags": ["..."]
+  "difficulty": "Favorable | Équilibré | Difficile | Très difficile",
+  "difficultyScore": nombre de 1 à 10,
+  "winCondition": "Comment tu gagnes ce matchup en 1-2 phrases simples",
+  "enemyWinCondition": "Comment ton adversaire peut te battre",
+  "earlyGame": {
+    "tips": ["conseil 1 pour toi", "conseil 2 pour toi"],
+    "enemyTips": ["ce que ton adversaire va essayer de faire"]
+  },
+  "midGame": {
+    "tips": ["conseil 1", "conseil 2"],
+    "enemyTips": ["danger 1"]
+  },
+  "lateGame": { "notes": "comment la game évolue en ta faveur ou contre toi" },
+  "keySpikes": {
+    "yours": ["niveau X", "item Y en français"],
+    "enemy": ["niveau X", "item Y en français"]
+  },
+  "mistakesToAvoid": ["erreur 1 à éviter", "erreur 2 à éviter"],
+  "runes": "Rune principale recommandée en français + pourquoi en une phrase",
+  "items": ["item 1 en français", "item 2 en français", "item 3 en français"],
+  "gamePlan": {
+    "0-5min": "ce que tu fais au début",
+    "5-15min": "ce que tu fais en mid-lane",
+    "15-25min": "ta stratégie en mid-game",
+    "25min+": "comment tu closes la game"
+  },
+  "commonMistakes": ["erreur fréquente 1", "erreur fréquente 2"],
+  "tags": ["tag1", "tag2"]
 }`,
       }],
     });
