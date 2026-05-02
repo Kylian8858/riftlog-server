@@ -630,6 +630,60 @@ app.get('/admin/dedupe', async (req, res) => {
   }
 });
 
+// ── MATCHUP AI ────────────────────────────────────────────────────────────────
+
+app.post('/matchup-analyze', express.json(), async (req, res) => {
+  const { champA, champB, lane, patch } = req.body;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY non configurée' });
+  if (!champA || !champB) return res.status(400).json({ error: 'champA et champB requis' });
+
+  const prompt = `Tu es un expert League of Legends. Analyse le matchup ${champA} vs ${champB} en ${lane || 'lane'} sur le patch ${patch || 'actuel'}.
+
+Réponds UNIQUEMENT en JSON valide avec cette structure exacte :
+{
+  "advantage": "favorable" ou "neutral" ou "unfavorable",
+  "summary": "résumé court du matchup (2 phrases max)",
+  "early_game": "phase de laning (2-3 phrases)",
+  "mid_game": "mid-game (2 phrases)",
+  "late_game": "late game (2 phrases)",
+  "key_tips": ["conseil 1", "conseil 2", "conseil 3"],
+  "items": ["item clé 1", "item clé 2"],
+  "runes": "setup de runes recommandé (1 phrase)"
+}
+
+Réponds uniquement avec le JSON brut, sans markdown ni backticks.`;
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      return res.status(r.status).json({ error: err?.error?.message || 'Erreur Claude API' });
+    }
+    const data = await r.json();
+    const raw = (data.content?.[0]?.text || '').trim();
+    const clean = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
+    let parsed;
+    try { parsed = JSON.parse(clean); }
+    catch { return res.status(500).json({ error: 'Réponse Claude non parseable', raw }); }
+    res.json(parsed);
+  } catch (err) {
+    res.status(502).json({ error: 'Impossible de joindre Claude API', detail: err.message });
+  }
+});
+
 // ── START ─────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;
