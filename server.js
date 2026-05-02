@@ -127,6 +127,18 @@ async function initDB() {
     ON timeline_data(match_id, puuid)
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS matchup_cache (
+      id          SERIAL PRIMARY KEY,
+      cache_key   TEXT UNIQUE,
+      champion_a  TEXT,
+      champion_b  TEXT,
+      lane        TEXT,
+      result      JSONB,
+      created_at  TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
   console.log('PostgreSQL tables ready');
 }
 
@@ -639,7 +651,17 @@ app.post('/matchup', express.json(), async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY non configurée' });
   if (!championA || !championB) return res.status(400).json({ error: 'championA et championB requis' });
 
+  const cacheKey = championA.toLowerCase() + '_' + championB.toLowerCase() + '_' + (lane || '').toLowerCase();
+
   try {
+    if (process.env.DATABASE_URL) {
+      const hit = await pool.query('SELECT result FROM matchup_cache WHERE cache_key = $1', [cacheKey]);
+      if (hit.rows.length > 0) {
+        res.setHeader('X-Cache', 'HIT');
+        return res.json(hit.rows[0].result);
+      }
+    }
+
     const message = await anthropic.messages.create({
       model: 'claude-opus-4-5',
       max_tokens: 4096,
@@ -689,9 +711,40 @@ Retourne ce JSON exact :
     let parsed;
     try { parsed = JSON.parse(clean); }
     catch { return res.status(500).json({ error: 'Réponse Claude non parseable', raw }); }
+
+    if (process.env.DATABASE_URL) {
+      await pool.query(
+        `INSERT INTO matchup_cache (cache_key, champion_a, champion_b, lane, result)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (cache_key) DO UPDATE SET result = EXCLUDED.result, created_at = NOW()`,
+        [cacheKey, championA, championB, lane, JSON.stringify(parsed)]
+      );
+    }
+
+    res.setHeader('X-Cache', 'MISS');
     res.json(parsed);
   } catch (err) {
     res.status(502).json({ error: err.message });
+  }
+});
+
+app.get('/matchup/cache', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT cache_key, champion_a, champion_b, lane, created_at FROM matchup_cache ORDER BY created_at DESC'
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/matchup/cache/:key', async (req, res) => {
+  try {
+    const result = await pool.query('DELETE FROM matchup_cache WHERE cache_key = $1', [req.params.key]);
+    res.json({ deleted: result.rowCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
