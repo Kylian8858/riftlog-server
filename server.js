@@ -2,6 +2,7 @@ const express    = require('express');
 const cors       = require('cors');
 const { Pool }   = require('pg');
 const Anthropic  = require('@anthropic-ai/sdk');
+const anthropic  = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT EXCEPTION:', err);
@@ -638,30 +639,34 @@ app.post('/matchup', express.json(), async (req, res) => {
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY non configurée' });
   if (!championA || !championB) return res.status(400).json({ error: 'championA et championB requis' });
 
-  const prompt = `Tu es un expert League of Legends. Analyse le matchup ${championA} vs ${championB} en ${lane || 'lane'} sur le patch ${patch || 'actuel'}.
-
-Réponds UNIQUEMENT en JSON valide avec cette structure exacte :
-{
-  "advantage": "favorable" ou "neutral" ou "unfavorable",
-  "summary": "résumé court du matchup (2 phrases max)",
-  "early_game": "phase de laning (2-3 phrases)",
-  "mid_game": "mid-game (2 phrases)",
-  "late_game": "late game (2 phrases)",
-  "key_tips": ["conseil 1", "conseil 2", "conseil 3"],
-  "items": ["item clé 1", "item clé 2"],
-  "runes": "setup de runes recommandé (1 phrase)"
-}
-
-Réponds uniquement avec le JSON brut, sans markdown ni backticks.`;
-
   try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }],
+    const message = await anthropic.messages.create({
+      model: 'claude-opus-4-5',
+      max_tokens: 1500,
+      system: "Tu es un coach League of Legends expert niveau LEC. Analyse les matchups de façon précise et actionnable. Réponds UNIQUEMENT en JSON valide, sans markdown, sans backticks.",
+      messages: [{
+        role: 'user',
+        content: `Analyse le matchup ${championA} vs ${championB} en ${lane} sur le patch ${patch}. Retourne ce JSON exact sans aucun texte autour :
+{
+  "difficulty": "Favorable|Équilibré|Difficile|Très difficile",
+  "difficultyScore": 1,
+  "winConditionA": "...",
+  "winConditionB": "...",
+  "earlyGame": { "tipsA": ["..."], "tipsB": ["..."] },
+  "midGame": { "tipsA": ["..."], "tipsB": ["..."] },
+  "lateGame": { "notes": "..." },
+  "keySpikes": { "A": ["..."], "B": ["..."] },
+  "mistakesToAvoid": { "A": ["..."], "B": ["..."] },
+  "runes": { "A": "...", "B": "..." },
+  "items": { "A": ["..."], "B": ["..."] },
+  "gamePlan": { "0-5min": "...", "5-15min": "...", "15-25min": "...", "25min+": "..." },
+  "commonMistakes": ["..."],
+  "tags": ["..."]
+}`,
+      }],
     });
-    const raw   = (message.content?.[0]?.text || '').trim();
+
+    const raw   = (message.content[0].text || '').trim();
     const clean = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
     let parsed;
     try { parsed = JSON.parse(clean); }
