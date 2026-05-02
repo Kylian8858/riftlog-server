@@ -642,7 +642,7 @@ app.post('/matchup', express.json(), async (req, res) => {
   try {
     const message = await anthropic.messages.create({
       model: 'claude-opus-4-5',
-      max_tokens: 1500,
+      max_tokens: 4096,
       system: "Tu es un coach League of Legends expert niveau LEC. Analyse les matchups de façon précise et actionnable. Réponds UNIQUEMENT en JSON valide, sans markdown, sans backticks.",
       messages: [{
         role: 'user',
