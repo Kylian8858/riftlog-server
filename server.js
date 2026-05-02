@@ -224,7 +224,7 @@ async function runSync(puuid, gameName, tagLine, region, key) {
 
     await sleep(50);
     const matchIds = await riotGet(
-      `${base}/lol/match/v5/matches/by-puuid/${puuid}/ids?count=20`,
+      `${base}/lol/match/v5/matches/by-puuid/${puuid}/ids?count=100`,
       key
     );
 
@@ -233,218 +233,231 @@ async function runSync(puuid, gameName, tagLine, region, key) {
 
     let imported = 0, skipped = 0;
 
-    for (const matchId of matchIds) {
-      const existing = await pool.query(
-        'SELECT match_id, all_participants FROM matches WHERE match_id = $1',
-        [matchId]
-      );
-      if (existing.rows.length > 0 && existing.rows[0].all_participants) { skipped++; continue; }
+    const BATCH_SIZE = 5;
+    for (let batchStart = 0; batchStart < matchIds.length; batchStart += BATCH_SIZE) {
+      const batch = matchIds.slice(batchStart, batchStart + BATCH_SIZE);
 
-      await sleep(50);
-      const match = await riotGet(`${base}/lol/match/v5/matches/${matchId}`, key);
+      await Promise.all(batch.map(async (matchId, i) => {
+        const idx = batchStart + i + 1;
+        console.log(`Sync match ${idx}/${total}...`);
 
-      await sleep(50);
-      let timeline = null;
-      try {
-        timeline = await riotGet(`${base}/lol/match/v5/matches/${matchId}/timeline`, key);
-      } catch (e) {
-        console.warn(`Timeline unavailable for ${matchId}:`, e.message);
-      }
-
-      const info = match.info;
-      const me   = info.participants.find(p => p.puuid === puuid);
-      if (!me) { skipped++; continue; }
-
-      const opp = info.participants.find(p =>
-        p.teamId !== me.teamId && p.individualPosition === me.individualPosition
-      );
-
-      const durSec   = info.gameDuration || 0;
-      const durMin   = durSec / 60;
-      const cs       = (me.totalMinionsKilled || 0) + (me.neutralMinionsKilled || 0);
-      const csPerMin = durMin > 0 ? Math.round((cs / durMin) * 10) / 10 : null;
-      const lane     = LANE_LABELS[me.individualPosition] || me.individualPosition || '';
-      const gameMode = QUEUE_LABELS[info.queueId] || info.gameMode || '';
-
-      // Enriched fields
-      const teamKills = info.participants
-        .filter(p => p.teamId === me.teamId)
-        .reduce((s, p) => s + (p.kills || 0), 0);
-      const killParticipation = teamKills > 0
-        ? Math.round(((me.kills || 0) + (me.assists || 0)) / teamKills * 100) / 100
-        : null;
-      const goldPerMin = durMin > 0 ? Math.round((me.goldEarned || 0) / durMin * 10) / 10 : null;
-      const items = JSON.stringify([
-        me.item0, me.item1, me.item2, me.item3, me.item4, me.item5, me.item6,
-      ]);
-      const runes = JSON.stringify(me.perks || null);
-      const allParticipants = JSON.stringify(info.participants.map(p => ({
-        puuid:            p.puuid,
-        championName:     p.championName,
-        teamId:           p.teamId,
-        individualPosition: p.individualPosition,
-        kills:            p.kills,
-        deaths:           p.deaths,
-        assists:          p.assists,
-        totalDamageDealtToChampions: p.totalDamageDealtToChampions,
-        goldEarned:       p.goldEarned,
-        totalMinionsKilled: p.totalMinionsKilled,
-        neutralMinionsKilled: p.neutralMinionsKilled,
-        visionScore:      p.visionScore,
-        win:              p.win,
-        item0:            p.item0,
-        item1:            p.item1,
-        item2:            p.item2,
-        item3:            p.item3,
-        item4:            p.item4,
-        item5:            p.item5,
-        item6:            p.item6,
-        summoner1Id:      p.summoner1Id,
-        summoner2Id:      p.summoner2Id,
-        perks:            p.perks ?? null,
-      })));
-      console.log('allParticipants length:', allParticipants ? JSON.parse(allParticipants).length : 'NULL');
-      console.log('allParticipants sample:', allParticipants ? allParticipants.slice(0, 100) : 'NULL');
-
-      await pool.query(
-        `INSERT INTO matches
-           (match_id, puuid, game_creation, game_duration, champion_name, enemy_champion,
-            lane, result, kills, deaths, assists, cs, cs_per_min, gold_earned, game_mode,
-            kill_participation, vision_score, damage_dealt, gold_per_min,
-            wards_placed, wards_killed, control_wards, items, runes, all_participants)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
-                 $16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
-         ON CONFLICT (match_id) DO UPDATE SET
-           puuid             = EXCLUDED.puuid,
-           game_creation     = EXCLUDED.game_creation,
-           game_duration     = EXCLUDED.game_duration,
-           champion_name     = EXCLUDED.champion_name,
-           enemy_champion    = EXCLUDED.enemy_champion,
-           lane              = EXCLUDED.lane,
-           result            = EXCLUDED.result,
-           kills             = EXCLUDED.kills,
-           deaths            = EXCLUDED.deaths,
-           assists           = EXCLUDED.assists,
-           cs                = EXCLUDED.cs,
-           cs_per_min        = EXCLUDED.cs_per_min,
-           gold_earned       = EXCLUDED.gold_earned,
-           game_mode         = EXCLUDED.game_mode,
-           kill_participation = EXCLUDED.kill_participation,
-           vision_score      = EXCLUDED.vision_score,
-           damage_dealt      = EXCLUDED.damage_dealt,
-           gold_per_min      = EXCLUDED.gold_per_min,
-           wards_placed      = EXCLUDED.wards_placed,
-           wards_killed      = EXCLUDED.wards_killed,
-           control_wards     = EXCLUDED.control_wards,
-           items             = EXCLUDED.items,
-           runes             = EXCLUDED.runes,
-           all_participants  = EXCLUDED.all_participants`,
-        [
-          matchId, puuid,
-          info.gameStartTimestamp || 0, durSec,
-          me.championName || '', opp?.championName || '',
-          lane, me.win ? 'win' : 'loss',
-          me.kills || 0, me.deaths || 0, me.assists || 0,
-          cs, csPerMin, me.goldEarned || 0, gameMode,
-          killParticipation,
-          me.visionScore || 0,
-          me.totalDamageDealtToChampions || 0,
-          goldPerMin,
-          me.wardsPlaced || 0,
-          me.wardsKilled || 0,
-          me.visionWardsBoughtInGame || 0,
-          items, runes, allParticipants,
-        ]
-      );
-      console.log('Match inserted, all_participants stored:', allParticipants ? 'YES' : 'NO');
-
-      const myPid  = me.participantId;
-      const oppPid = opp?.participantId ?? null;
-      const frames = timeline?.info?.frames || [];
-
-      function closestFrame(ms) {
-        return frames.reduce((best, f) => {
-          if (f.timestamp <= ms) return f;
-          return best;
-        }, frames[0] || null);
-      }
-
-      function extractFrame(frame) {
-        if (!frame?.participantFrames) return { my: null, opp: null };
-        return {
-          my:  frame.participantFrames[myPid]  || null,
-          opp: oppPid ? frame.participantFrames[oppPid] || null : null,
-        };
-      }
-
-      function frameStats(my, opp) {
-        if (!my) return { gold: null, cs: null, xp: null, goldDiff: null, csDiff: null };
-        const gold = my.totalGold ?? null;
-        const cs   = (my.minionsKilled || 0) + (my.jungleMinionsKilled || 0);
-        const xp   = my.xp ?? null;
-        let goldDiff = null, csDiff = null;
-        if (opp) {
-          goldDiff = gold - (opp.totalGold || 0);
-          csDiff   = cs   - ((opp.minionsKilled || 0) + (opp.jungleMinionsKilled || 0));
+        const existing = await pool.query(
+          'SELECT match_id, all_participants FROM matches WHERE match_id = $1',
+          [matchId]
+        );
+        if (existing.rows.length > 0 && existing.rows[0].all_participants) {
+          skipped++;
+          return;
         }
-        return { gold, cs, xp, goldDiff, csDiff };
-      }
 
-      const { my: my10, opp: opp10 } = extractFrame(closestFrame(600000));
-      const s10 = frameStats(my10, opp10);
+        await sleep(50);
+        const match = await riotGet(`${base}/lol/match/v5/matches/${matchId}`, key);
 
-      const { my: my15, opp: opp15 } = extractFrame(closestFrame(900000));
-      const s15 = frameStats(my15, opp15);
+        await sleep(50);
+        let timeline = null;
+        try {
+          timeline = await riotGet(`${base}/lol/match/v5/matches/${matchId}/timeline`, key);
+        } catch (e) {
+          console.warn(`Timeline unavailable for ${matchId}:`, e.message);
+        }
 
-      console.log('Timeline match:', matchId);
-      console.log('Gold @10:', s10.gold);
-      console.log('Gold diff @10:', s10.goldDiff);
-      console.log('Inserting timeline data...');
+        const info = match.info;
+        const me   = info.participants.find(p => p.puuid === puuid);
+        if (!me) { skipped++; return; }
 
-      let kills10 = 0, deaths10 = 0;
-      for (const frame of frames) {
-        if (!frame.events) continue;
-        for (const ev of frame.events) {
-          if (ev.timestamp >= 600000) break;
-          if (ev.type === 'CHAMPION_KILL') {
-            if (ev.killerId === myPid) kills10++;
-            if (ev.victimId === myPid) deaths10++;
+        const opp = info.participants.find(p =>
+          p.teamId !== me.teamId && p.individualPosition === me.individualPosition
+        );
+
+        const durSec   = info.gameDuration || 0;
+        const durMin   = durSec / 60;
+        const cs       = (me.totalMinionsKilled || 0) + (me.neutralMinionsKilled || 0);
+        const csPerMin = durMin > 0 ? Math.round((cs / durMin) * 10) / 10 : null;
+        const lane     = LANE_LABELS[me.individualPosition] || me.individualPosition || '';
+        const gameMode = QUEUE_LABELS[info.queueId] || info.gameMode || '';
+
+        // Enriched fields
+        const teamKills = info.participants
+          .filter(p => p.teamId === me.teamId)
+          .reduce((s, p) => s + (p.kills || 0), 0);
+        const killParticipation = teamKills > 0
+          ? Math.round(((me.kills || 0) + (me.assists || 0)) / teamKills * 100) / 100
+          : null;
+        const goldPerMin = durMin > 0 ? Math.round((me.goldEarned || 0) / durMin * 10) / 10 : null;
+        const items = JSON.stringify([
+          me.item0, me.item1, me.item2, me.item3, me.item4, me.item5, me.item6,
+        ]);
+        const runes = JSON.stringify(me.perks || null);
+        const allParticipants = JSON.stringify(info.participants.map(p => ({
+          puuid:            p.puuid,
+          championName:     p.championName,
+          teamId:           p.teamId,
+          individualPosition: p.individualPosition,
+          kills:            p.kills,
+          deaths:           p.deaths,
+          assists:          p.assists,
+          totalDamageDealtToChampions: p.totalDamageDealtToChampions,
+          goldEarned:       p.goldEarned,
+          totalMinionsKilled: p.totalMinionsKilled,
+          neutralMinionsKilled: p.neutralMinionsKilled,
+          visionScore:      p.visionScore,
+          win:              p.win,
+          item0:            p.item0,
+          item1:            p.item1,
+          item2:            p.item2,
+          item3:            p.item3,
+          item4:            p.item4,
+          item5:            p.item5,
+          item6:            p.item6,
+          summoner1Id:      p.summoner1Id,
+          summoner2Id:      p.summoner2Id,
+          perks:            p.perks ?? null,
+        })));
+        console.log('allParticipants length:', allParticipants ? JSON.parse(allParticipants).length : 'NULL');
+        console.log('allParticipants sample:', allParticipants ? allParticipants.slice(0, 100) : 'NULL');
+
+        await pool.query(
+          `INSERT INTO matches
+             (match_id, puuid, game_creation, game_duration, champion_name, enemy_champion,
+              lane, result, kills, deaths, assists, cs, cs_per_min, gold_earned, game_mode,
+              kill_participation, vision_score, damage_dealt, gold_per_min,
+              wards_placed, wards_killed, control_wards, items, runes, all_participants)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                   $16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+           ON CONFLICT (match_id) DO UPDATE SET
+             puuid             = EXCLUDED.puuid,
+             game_creation     = EXCLUDED.game_creation,
+             game_duration     = EXCLUDED.game_duration,
+             champion_name     = EXCLUDED.champion_name,
+             enemy_champion    = EXCLUDED.enemy_champion,
+             lane              = EXCLUDED.lane,
+             result            = EXCLUDED.result,
+             kills             = EXCLUDED.kills,
+             deaths            = EXCLUDED.deaths,
+             assists           = EXCLUDED.assists,
+             cs                = EXCLUDED.cs,
+             cs_per_min        = EXCLUDED.cs_per_min,
+             gold_earned       = EXCLUDED.gold_earned,
+             game_mode         = EXCLUDED.game_mode,
+             kill_participation = EXCLUDED.kill_participation,
+             vision_score      = EXCLUDED.vision_score,
+             damage_dealt      = EXCLUDED.damage_dealt,
+             gold_per_min      = EXCLUDED.gold_per_min,
+             wards_placed      = EXCLUDED.wards_placed,
+             wards_killed      = EXCLUDED.wards_killed,
+             control_wards     = EXCLUDED.control_wards,
+             items             = EXCLUDED.items,
+             runes             = EXCLUDED.runes,
+             all_participants  = EXCLUDED.all_participants`,
+          [
+            matchId, puuid,
+            info.gameStartTimestamp || 0, durSec,
+            me.championName || '', opp?.championName || '',
+            lane, me.win ? 'win' : 'loss',
+            me.kills || 0, me.deaths || 0, me.assists || 0,
+            cs, csPerMin, me.goldEarned || 0, gameMode,
+            killParticipation,
+            me.visionScore || 0,
+            me.totalDamageDealtToChampions || 0,
+            goldPerMin,
+            me.wardsPlaced || 0,
+            me.wardsKilled || 0,
+            me.visionWardsBoughtInGame || 0,
+            items, runes, allParticipants,
+          ]
+        );
+        console.log('Match inserted, all_participants stored:', allParticipants ? 'YES' : 'NO');
+
+        const myPid  = me.participantId;
+        const oppPid = opp?.participantId ?? null;
+        const frames = timeline?.info?.frames || [];
+
+        function closestFrame(ms) {
+          return frames.reduce((best, f) => {
+            if (f.timestamp <= ms) return f;
+            return best;
+          }, frames[0] || null);
+        }
+
+        function extractFrame(frame) {
+          if (!frame?.participantFrames) return { my: null, opp: null };
+          return {
+            my:  frame.participantFrames[myPid]  || null,
+            opp: oppPid ? frame.participantFrames[oppPid] || null : null,
+          };
+        }
+
+        function frameStats(my, opp) {
+          if (!my) return { gold: null, cs: null, xp: null, goldDiff: null, csDiff: null };
+          const gold = my.totalGold ?? null;
+          const cs   = (my.minionsKilled || 0) + (my.jungleMinionsKilled || 0);
+          const xp   = my.xp ?? null;
+          let goldDiff = null, csDiff = null;
+          if (opp) {
+            goldDiff = gold - (opp.totalGold || 0);
+            csDiff   = cs   - ((opp.minionsKilled || 0) + (opp.jungleMinionsKilled || 0));
+          }
+          return { gold, cs, xp, goldDiff, csDiff };
+        }
+
+        const { my: my10, opp: opp10 } = extractFrame(closestFrame(600000));
+        const s10 = frameStats(my10, opp10);
+
+        const { my: my15, opp: opp15 } = extractFrame(closestFrame(900000));
+        const s15 = frameStats(my15, opp15);
+
+        console.log('Timeline match:', matchId);
+        console.log('Gold @10:', s10.gold);
+        console.log('Gold diff @10:', s10.goldDiff);
+        console.log('Inserting timeline data...');
+
+        let kills10 = 0, deaths10 = 0;
+        for (const frame of frames) {
+          if (!frame.events) continue;
+          for (const ev of frame.events) {
+            if (ev.timestamp >= 600000) break;
+            if (ev.type === 'CHAMPION_KILL') {
+              if (ev.killerId === myPid) kills10++;
+              if (ev.victimId === myPid) deaths10++;
+            }
           }
         }
-      }
 
-      await pool.query(
-        `INSERT INTO timeline_data
-           (match_id, puuid,
-            gold_at_10, cs_at_10, xp_at_10, gold_diff_at_10, cs_diff_at_10,
-            kills_at_10, deaths_at_10,
-            gold_at_15, cs_at_15, xp_at_15, gold_diff_at_15, cs_diff_at_15)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-         ON CONFLICT (match_id, puuid) DO UPDATE SET
-           gold_at_10      = EXCLUDED.gold_at_10,
-           cs_at_10        = EXCLUDED.cs_at_10,
-           xp_at_10        = EXCLUDED.xp_at_10,
-           gold_diff_at_10 = EXCLUDED.gold_diff_at_10,
-           cs_diff_at_10   = EXCLUDED.cs_diff_at_10,
-           kills_at_10     = EXCLUDED.kills_at_10,
-           deaths_at_10    = EXCLUDED.deaths_at_10,
-           gold_at_15      = EXCLUDED.gold_at_15,
-           cs_at_15        = EXCLUDED.cs_at_15,
-           xp_at_15        = EXCLUDED.xp_at_15,
-           gold_diff_at_15 = EXCLUDED.gold_diff_at_15,
-           cs_diff_at_15   = EXCLUDED.cs_diff_at_15`,
-        [
-          matchId, puuid,
-          s10.gold, s10.cs, s10.xp, s10.goldDiff, s10.csDiff,
-          kills10, deaths10,
-          s15.gold, s15.cs, s15.xp, s15.goldDiff, s15.csDiff,
-        ]
-      );
+        await pool.query(
+          `INSERT INTO timeline_data
+             (match_id, puuid,
+              gold_at_10, cs_at_10, xp_at_10, gold_diff_at_10, cs_diff_at_10,
+              kills_at_10, deaths_at_10,
+              gold_at_15, cs_at_15, xp_at_15, gold_diff_at_15, cs_diff_at_15)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+           ON CONFLICT (match_id, puuid) DO UPDATE SET
+             gold_at_10      = EXCLUDED.gold_at_10,
+             cs_at_10        = EXCLUDED.cs_at_10,
+             xp_at_10        = EXCLUDED.xp_at_10,
+             gold_diff_at_10 = EXCLUDED.gold_diff_at_10,
+             cs_diff_at_10   = EXCLUDED.cs_diff_at_10,
+             kills_at_10     = EXCLUDED.kills_at_10,
+             deaths_at_10    = EXCLUDED.deaths_at_10,
+             gold_at_15      = EXCLUDED.gold_at_15,
+             cs_at_15        = EXCLUDED.cs_at_15,
+             xp_at_15        = EXCLUDED.xp_at_15,
+             gold_diff_at_15 = EXCLUDED.gold_diff_at_15,
+             cs_diff_at_15   = EXCLUDED.cs_diff_at_15`,
+          [
+            matchId, puuid,
+            s10.gold, s10.cs, s10.xp, s10.goldDiff, s10.csDiff,
+            kills10, deaths10,
+            s15.gold, s15.cs, s15.xp, s15.goldDiff, s15.csDiff,
+          ]
+        );
 
-      console.log('Timeline inserted for:', matchId);
-      imported++;
-      syncStatus[puuid].imported = imported;
-      syncStatus[puuid].message  = `${imported} / ${total - skipped} match${imported > 1 ? 's' : ''} importé${imported > 1 ? 's' : ''}…`;
+        console.log('Timeline inserted for:', matchId);
+        imported++;
+        syncStatus[puuid].imported = imported;
+        syncStatus[puuid].message  = `${imported} / ${total - skipped} match${imported > 1 ? 's' : ''} importé${imported > 1 ? 's' : ''}…`;
+      }));
+
+      if (batchStart + BATCH_SIZE < matchIds.length) await sleep(1000);
     }
 
     syncStatus[puuid] = { status: 'done', imported, skipped, total, message: `${imported} match${imported > 1 ? 's' : ''} importé${imported > 1 ? 's' : ''}` };
