@@ -662,51 +662,84 @@ app.post('/matchup', express.json(), async (req, res) => {
       }
     }
 
+    // Best-effort U.GG data fetch (context hint for Claude)
+    let uggContext = '';
+    try {
+      const patchFormatted = (patch || '').replace(/\./g, '_');
+      const uggUrl = `https://stats2.u.gg/lol/1.5/matchup-data/world/ranked_solo_5x5/${patchFormatted}/${championA.toLowerCase()}/${championB.toLowerCase()}/1/overview.json`;
+      const uggRes = await fetch(uggUrl, { signal: AbortSignal.timeout(5000) });
+      if (uggRes.ok) {
+        const uggData = await uggRes.json();
+        uggContext = `\n\nDonnées U.GG récupérées : ${JSON.stringify(uggData).slice(0, 800)}`;
+      } else {
+        throw new Error(`U.GG stats2 ${uggRes.status}`);
+      }
+    } catch {
+      try {
+        const pageRes = await fetch(
+          `https://u.gg/lol/champions/${championA.toLowerCase()}/matchups`,
+          { signal: AbortSignal.timeout(5000), headers: { 'User-Agent': 'Mozilla/5.0' } }
+        );
+        uggContext = pageRes.ok
+          ? '\n\n(Page U.GG accessible — utilise le web search pour obtenir les statistiques réelles)'
+          : '\n\n(U.GG non disponible — utilise le web search pour obtenir les vraies données)';
+      } catch {
+        uggContext = '\n\n(U.GG non disponible — utilise le web search pour obtenir les vraies données)';
+      }
+    }
+
     const message = await anthropic.messages.create({
       model: 'claude-opus-4-5',
-      max_tokens: 4096,
-      system: `Tu es un coach League of Legends qui explique les matchups en français simple et accessible. Tu t'adresses directement au joueur qui joue ${championA} en utilisant 'tu', 'ton', 'ta', 'tes'. Tes explications doivent être claires pour un joueur débutant ou intermédiaire. Si tu utilises un terme de jeu (freeze, roam, poke, all-in, spike...), explique-le en quelques mots entre parenthèses. Pour les noms d'items, utilise le nom français officiel UNIQUEMENT si la traduction est connue et naturelle (ex: Sablier de Zhonya, Bâton des âges, Comète arcanique). Si tu n'es pas certain de la traduction française officielle, garde le nom anglais original. Ne traduis JAMAIS un nom d'item si tu n'es pas sûr à 100% — il vaut mieux garder l'anglais que d'inventer une traduction. Réponds UNIQUEMENT en JSON valide, sans markdown, sans backticks, sans texte avant ou après.`,
+      max_tokens: 2000,
+      tools: [{
+        type: 'web_search_20250305',
+        name: 'web_search',
+      }],
+      system: `Tu es un coach League of Legends expert. Tu as accès à la recherche web. Avant de répondre, cherche sur U.GG et Mobafire les informations sur le matchup demandé pour t'appuyer sur des données réelles et récentes. Utilise 'tu' pour t'adresser au joueur qui joue ${championA}. Explications simples et accessibles. Pour les items, garde le nom anglais si tu n'es pas certain de la traduction française officielle. Réponds UNIQUEMENT en JSON valide sans markdown ni backticks.`,
       messages: [{
         role: 'user',
-        content: `Tu joues ${championA} contre ${championB} en ${lane} sur le patch ${patch}.
+        content: `Recherche sur U.GG et Mobafire les données sur le matchup ${championA} vs ${championB} en ${lane} patch ${patch}.${uggContext}
 
-Explique ce matchup au joueur qui joue ${championA} en utilisant 'tu' à chaque fois. Parle-lui directement, simplement, comme un coach qui l'accompagne en jeu.
+Utilise ces sources pour construire une analyse fiable basée sur de vraies données. Adresse-toi au joueur qui joue ${championA} avec 'tu'.
 
-Retourne ce JSON exact :
+Retourne ce JSON :
 {
   "difficulty": "Favorable | Équilibré | Difficile | Très difficile",
-  "difficultyScore": nombre de 1 à 10,
-  "winCondition": "Comment tu gagnes ce matchup en 1-2 phrases simples",
+  "difficultyScore": 1-10,
+  "winrate": "XX% (basé sur U.GG)",
+  "sampleSize": "X games analysées",
+  "winCondition": "Comment tu gagnes ce matchup",
   "enemyWinCondition": "Comment ton adversaire peut te battre",
   "earlyGame": {
-    "tips": ["conseil 1 pour toi", "conseil 2 pour toi"],
-    "enemyTips": ["ce que ton adversaire va essayer de faire"]
+    "tips": ["conseil basé sur vraies données"],
+    "enemyTips": ["danger réel"]
   },
   "midGame": {
-    "tips": ["conseil 1", "conseil 2"],
-    "enemyTips": ["danger 1"]
+    "tips": ["conseil"],
+    "enemyTips": ["danger"]
   },
-  "lateGame": { "notes": "comment la game évolue en ta faveur ou contre toi" },
+  "lateGame": { "notes": "..." },
   "keySpikes": {
-    "yours": ["niveau X", "item Y en français"],
-    "enemy": ["niveau X", "item Y en français"]
+    "yours": ["niveau X", "item Y"],
+    "enemy": ["niveau X", "item Y"]
   },
-  "mistakesToAvoid": ["erreur 1 à éviter", "erreur 2 à éviter"],
-  "runes": "Rune principale recommandée en français + pourquoi en une phrase",
-  "items": ["item 1 en français", "item 2 en français", "item 3 en français"],
+  "mistakesToAvoid": ["erreur fréquente basée sur données réelles"],
+  "runes": "Rune principale recommandée par U.GG + pourquoi",
+  "items": ["item 1", "item 2", "item 3"],
   "gamePlan": {
-    "0-5min": "ce que tu fais au début",
-    "5-15min": "ce que tu fais en mid-lane",
-    "15-25min": "ta stratégie en mid-game",
-    "25min+": "comment tu closes la game"
+    "0-5min": "...",
+    "5-15min": "...",
+    "15-25min": "...",
+    "25min+": "..."
   },
-  "commonMistakes": ["erreur fréquente 1", "erreur fréquente 2"],
-  "tags": ["tag1", "tag2"]
+  "commonMistakes": ["erreur 1", "erreur 2"],
+  "tags": ["tag1", "tag2"],
+  "sources": ["U.GG", "Mobafire"]
 }`,
       }],
     });
 
-    const raw   = (message.content[0].text || '').trim();
+    const raw   = (message.content.find(b => b.type === 'text')?.text || '').trim();
     const clean = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
     let parsed;
     try { parsed = JSON.parse(clean); }
