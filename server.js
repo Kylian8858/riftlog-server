@@ -153,9 +153,11 @@ const LANE_LABELS = {
 async function riotGet(url, key, retries = 3) {
   const r = await fetch(url, { headers: { 'X-Riot-Token': key } });
   if (r.status === 429) {
-    const retry = parseInt(r.headers.get('Retry-After') || '2');
-    const wait  = Math.max(retry * 1000, 2000);
-    if (retries > 0) { await sleep(wait); return riotGet(url, key, retries - 1); }
+    if (retries > 0) {
+      console.log('Rate limit atteint, attente 10s...');
+      await sleep(10000);
+      return riotGet(url, key, retries - 1);
+    }
     throw new Error('Rate limit persistant — réessaie dans quelques secondes');
   }
   if (!r.ok) {
@@ -233,7 +235,7 @@ async function runSync(puuid, gameName, tagLine, region, key) {
 
     let imported = 0, skipped = 0;
 
-    const BATCH_SIZE = 5;
+    const BATCH_SIZE = 2;
     for (let batchStart = 0; batchStart < matchIds.length; batchStart += BATCH_SIZE) {
       const batch = matchIds.slice(batchStart, batchStart + BATCH_SIZE);
 
@@ -457,7 +459,7 @@ async function runSync(puuid, gameName, tagLine, region, key) {
         syncStatus[puuid].message  = `${imported} / ${total - skipped} match${imported > 1 ? 's' : ''} importé${imported > 1 ? 's' : ''}…`;
       }));
 
-      if (batchStart + BATCH_SIZE < matchIds.length) await sleep(1000);
+      if (batchStart + BATCH_SIZE < matchIds.length) await sleep(3000);
     }
 
     syncStatus[puuid] = { status: 'done', imported, skipped, total, message: `${imported} match${imported > 1 ? 's' : ''} importé${imported > 1 ? 's' : ''}` };
