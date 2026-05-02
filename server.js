@@ -643,7 +643,7 @@ app.post('/matchup', express.json(), async (req, res) => {
     const message = await anthropic.messages.create({
       model: 'claude-opus-4-5',
       max_tokens: 4096,
-      system: `Tu es un coach League of Legends qui explique les matchups en français simple et accessible. Tu t'adresses directement au joueur qui joue ${championA} en utilisant 'tu', 'ton', 'ta', 'tes'. Tes explications doivent être claires pour un joueur débutant ou intermédiaire. Si tu utilises un terme de jeu (freeze, roam, poke, all-in, spike...), explique-le en quelques mots entre parenthèses. Tous les noms d'items doivent être en français. Réponds UNIQUEMENT en JSON valide, sans markdown, sans backticks, sans texte avant ou après.`,
+      system: `Tu es un coach League of Legends qui explique les matchups en français simple et accessible. Tu t'adresses directement au joueur qui joue ${championA} en utilisant 'tu', 'ton', 'ta', 'tes'. Tes explications doivent être claires pour un joueur débutant ou intermédiaire. Si tu utilises un terme de jeu (freeze, roam, poke, all-in, spike...), explique-le en quelques mots entre parenthèses. Pour les noms d'items, utilise le nom français officiel UNIQUEMENT si la traduction est connue et naturelle (ex: Sablier de Zhonya, Bâton des âges, Comète arcanique). Si tu n'es pas certain de la traduction française officielle, garde le nom anglais original. Ne traduis JAMAIS un nom d'item si tu n'es pas sûr à 100% — il vaut mieux garder l'anglais que d'inventer une traduction. Réponds UNIQUEMENT en JSON valide, sans markdown, sans backticks, sans texte avant ou après.`,
       messages: [{
         role: 'user',
         content: `Tu joues ${championA} contre ${championB} en ${lane} sur le patch ${patch}.
