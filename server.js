@@ -1,6 +1,7 @@
-const express = require('express');
-const cors    = require('cors');
-const { Pool } = require('pg');
+const express    = require('express');
+const cors       = require('cors');
+const { Pool }   = require('pg');
+const Anthropic  = require('@anthropic-ai/sdk');
 
 process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT EXCEPTION:', err);
@@ -632,13 +633,12 @@ app.get('/admin/dedupe', async (req, res) => {
 
 // ── MATCHUP AI ────────────────────────────────────────────────────────────────
 
-app.post('/matchup-analyze', express.json(), async (req, res) => {
-  const { champA, champB, lane, patch } = req.body;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY non configurée' });
-  if (!champA || !champB) return res.status(400).json({ error: 'champA et champB requis' });
+app.post('/matchup', express.json(), async (req, res) => {
+  const { championA, championB, lane, patch } = req.body;
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY non configurée' });
+  if (!championA || !championB) return res.status(400).json({ error: 'championA et championB requis' });
 
-  const prompt = `Tu es un expert League of Legends. Analyse le matchup ${champA} vs ${champB} en ${lane || 'lane'} sur le patch ${patch || 'actuel'}.
+  const prompt = `Tu es un expert League of Legends. Analyse le matchup ${championA} vs ${championB} en ${lane || 'lane'} sur le patch ${patch || 'actuel'}.
 
 Réponds UNIQUEMENT en JSON valide avec cette structure exacte :
 {
@@ -655,32 +655,20 @@ Réponds UNIQUEMENT en JSON valide avec cette structure exacte :
 Réponds uniquement avec le JSON brut, sans markdown ni backticks.`;
 
   try {
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }],
-      }),
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const message = await client.messages.create({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }],
     });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      return res.status(r.status).json({ error: err?.error?.message || 'Erreur Claude API' });
-    }
-    const data = await r.json();
-    const raw = (data.content?.[0]?.text || '').trim();
+    const raw   = (message.content?.[0]?.text || '').trim();
     const clean = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
     let parsed;
     try { parsed = JSON.parse(clean); }
     catch { return res.status(500).json({ error: 'Réponse Claude non parseable', raw }); }
     res.json(parsed);
   } catch (err) {
-    res.status(502).json({ error: 'Impossible de joindre Claude API', detail: err.message });
+    res.status(502).json({ error: err.message });
   }
 });
 
